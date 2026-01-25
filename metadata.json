@@ -1,0 +1,9 @@
+{
+  "name": "Auditros AI",
+  "description": "An AI-powered auditing platform for CAs and finance professionals, providing precise audit observations with verified references and search-grounded intelligence.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone",
+    "camera"
+  ]
+}
