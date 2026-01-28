@@ -1,159 +1,151 @@
 
-import React, { useState, useRef, useEffect } from 'react';
-import { Sidebar } from './components/Sidebar';
-import { ChatInterface } from './components/ChatInterface';
-import { StandardModal } from './components/StandardModal';
-import { Message, AuditDocument } from './types';
-import { GeminiService, ModelType } from './geminiService';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Sidebar } from './components/Sidebar.tsx';
+import { ChatInterface } from './components/ChatInterface.tsx';
+import { LandingPage } from './components/LandingPage.tsx';
+import { Message, AuditDocument, ChatSession } from './types.ts';
+import { GeminiService, ModelType } from './geminiService.ts';
+import { ChatHistoryStore, AuditExperienceStore } from './storageService.ts';
 
-declare const window: any;
-
-const INITIAL_GREETING = "COMMAND SYSTEM ONLINE ----------------\nGROUNDING: ICAI, MCA, TAX PORTAL SECURE TUNNELS.\nSELECT MODULE TO INITIATE INTEL SCAN.";
+const INITIAL_GREETING = "AUDITROS INTELLIGENCE NODE CONNECTED\nSTATUS: OPERATIONAL\nGROUNDING: ICAI, MCA, TAX PORTAL ACTIVE CHANNELS\n\nSELECT A MODULE FROM THE SIDEBAR TO INITIATE TECHNICAL ANALYSIS.";
 
 const App: React.FC = () => {
-  const [panelMessages, setPanelMessages] = useState<Record<string, Message[]>>({
-    'Audit Observation': [{ id: 'init-1', role: 'assistant', content: INITIAL_GREETING, timestamp: new Date() }],
-    'Audit Plan': [],
-    'Accounting Standards': [],
-    'Regulatory Updates': [],
-    'Tax Compliance': []
-  });
-
+  const [showLanding, setShowLanding] = useState(true);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [documents, setDocuments] = useState<AuditDocument[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [activeSection, setActiveSection] = useState('Audit Observation');
-  const [hasCustomKey, setHasCustomKey] = useState(false);
   
   const geminiRef = useRef(new GeminiService());
 
+  const activeSession = useMemo(() => {
+    return sessions.find(s => s.id === activeSessionId) || null;
+  }, [sessions, activeSessionId]);
+
   useEffect(() => {
-    const checkKey = async () => {
-      if (window.aistudio?.hasSelectedApiKey) {
-        try {
-          const hasKey = await window.aistudio.hasSelectedApiKey();
-          setHasCustomKey(hasKey);
-        } catch (e) {
-          console.error("Key check error", e);
-        }
-      }
-    };
-    checkKey();
+    const history = ChatHistoryStore.getAll();
+    if (history.length > 0) {
+      setSessions(history);
+      setActiveSessionId(history[0].id);
+    } else {
+      handleNewChat('Audit Observation');
+    }
   }, []);
 
-  const handleSelectKey = async () => {
-    if (window.aistudio?.openSelectKey) {
-      await window.aistudio.openSelectKey();
-      setHasCustomKey(true);
-      const msg: Message = { 
-        id: Date.now().toString(), 
-        role: 'assistant', 
-        content: "API KEY ROTATED ----------------\nPROFESSIONAL TIER ENGINE INITIALIZED. QUOTA LIMITS UPDATED.", 
-        timestamp: new Date() 
-      };
-      setPanelMessages(prev => ({ ...prev, [activeSection]: [...(prev[activeSection] || []), msg] }));
-    }
+  const initiateSystemHandshake = () => {
+    setShowLanding(false);
   };
 
-  const handleSendMessage = async (content: string, type: ModelType = 'thinking', imageData?: { data: string; mimeType: string }) => {
+  const handleNewChat = (section: string) => {
+    const newSession: ChatSession = {
+      id: Date.now().toString(),
+      title: `${section} Analysis`,
+      section: section,
+      messages: [{ id: 'init-' + Date.now(), role: 'assistant', content: INITIAL_GREETING, timestamp: new Date() }],
+      lastUpdate: Date.now()
+    };
+    const updated = [newSession, ...sessions];
+    setSessions(updated);
+    setActiveSessionId(newSession.id);
+    ChatHistoryStore.saveSession(newSession);
+  };
+
+  const handleSendMessage = async (content: string, type: ModelType = 'thinking', options?: any) => {
+    if (!activeSession) return;
+
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content, timestamp: new Date() };
-    setPanelMessages(prev => ({ ...prev, [activeSection]: [...(prev[activeSection] || []), userMsg] }));
+    let updatedTitle = activeSession.title;
+    if (activeSession.messages.length <= 1) {
+      updatedTitle = content.length > 30 ? content.substring(0, 27) + '...' : content;
+    }
+
+    const updatedSession: ChatSession = {
+      ...activeSession,
+      title: updatedTitle,
+      messages: [...activeSession.messages, userMsg],
+      lastUpdate: Date.now()
+    };
+
+    setSessions(prev => prev.map(s => s.id === updatedSession.id ? updatedSession : s));
     setIsProcessing(true);
 
     try {
-      const history = (panelMessages[activeSection] || []).map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+      const history = updatedSession.messages.map(m => ({ 
+        role: m.role === 'assistant' ? 'model' : 'user', 
+        parts: [{ text: m.content }] 
+      }));
       const docContext = documents.map(doc => `[FILE: ${doc.name}]\n${doc.content || "Attached evidence source."}`).join('\n\n');
       
-      let panelFocus = `[MODULE: ${activeSection.toUpperCase()}] `;
-      const { text, sources } = await geminiRef.current.generateAuditResponse(`${panelFocus}\n${content}`, history, docContext, type, imageData);
-      
-      setPanelMessages(prev => ({
-        ...prev,
-        [activeSection]: [...(prev[activeSection] || []), { id: Date.now().toString(), role: 'assistant', content: text, timestamp: new Date(), sources }]
-      }));
-    } catch (error: any) {
-      console.error(error);
-      let errorMessage = "SYSTEM FAILURE: AN UNEXPECTED ERROR OCCURRED.";
-      
-      if (error.message === "QUOTA_EXHAUSTED" || error.message?.includes('429')) {
-        errorMessage = "RESOURCE EXHAUSTED ----------------\nLIMIT: FREE TIER QUOTA REACHED.\nACTION: ROTATE TO A PAID API KEY TO CONTINUE HIGH-FREQUENCY AUDITING.\n[INFO: ai.google.dev/gemini-api/docs/billing]";
+      let response;
+      if (type === 'video') {
+        response = await geminiRef.current.generateVideo(content, { image: options?.imageData });
+      } else if (type === 'image') {
+        response = await geminiRef.current.generateImage(content, options);
+      } else {
+        response = await geminiRef.current.generateAuditResponse(
+          content, history, docContext, type, activeSession.section, options?.imageData
+        );
       }
+      
+      const assistantMsg: Message = { id: Date.now().toString(), role: 'assistant', content: response.text, timestamp: new Date(), sources: response.sources };
+      const finalSession = { ...updatedSession, messages: [...updatedSession.messages, assistantMsg], lastUpdate: Date.now() };
+      setSessions(prev => prev.map(s => s.id === finalSession.id ? finalSession : s));
+      ChatHistoryStore.saveSession(finalSession);
 
-      const errMsg: Message = { id: Date.now().toString(), role: 'assistant', content: errorMessage, timestamp: new Date() };
-      setPanelMessages(prev => ({ ...prev, [activeSection]: [...(prev[activeSection] || []), errMsg] }));
-    } finally { setIsProcessing(false); }
-  };
-
-  const removeDocument = (id: string) => {
-    setDocuments(prev => prev.filter(d => d.id !== id));
-  };
-
-  const onSectionSelect = (label: string) => {
-    setActiveSection(label);
-    if (!panelMessages[label]?.length) {
-      setPanelMessages(prev => ({
-        ...prev,
-        [label]: [{ id: Date.now().toString(), role: 'assistant', content: `MODULE ${label.toUpperCase()} LOADED.`, timestamp: new Date() }]
-      }));
+      if (type !== 'video' && type !== 'image') {
+        setTimeout(async () => {
+          const learning = await geminiRef.current.extractLearning(activeSession.section, content, response.text);
+          if (learning) AuditExperienceStore.saveExperience(learning);
+        }, 1000);
+      }
+    } catch (error: any) {
+      const errorMessage = "SERVICE UNAVAILABLE: AN UNEXPECTED ERROR OCCURRED DURING PROCESSING.";
+      const errAssistantMsg: Message = { id: Date.now().toString(), role: 'assistant', content: errorMessage, timestamp: new Date() };
+      setSessions(prev => prev.map(s => s.id === updatedSession.id ? { ...updatedSession, messages: [...updatedSession.messages, errAssistantMsg] } : s));
+    } finally { 
+      setIsProcessing(false); 
     }
   };
 
-  const handleUpload = (file: File) => {
-    const newDoc: AuditDocument = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: file.name,
-      type: file.type,
-      size: `${(file.size/1024).toFixed(1)}KB`,
-      uploadDate: new Date()
-    };
-    setDocuments(prev => [...prev, newDoc]);
-  };
+  if (showLanding) return <LandingPage onStart={initiateSystemHandshake} />;
 
   return (
-    <div className="flex h-screen w-full bg-[#020202] text-gray-400 overflow-hidden font-inter selection:bg-cyan-500/20">
+    <div className="flex h-screen w-full bg-[#030303] text-[#a1a1aa] overflow-hidden font-sans selection:bg-cyan-500/30">
       <Sidebar 
-        isOpen={isSidebarOpen} 
-        onToggle={() => setIsSidebarOpen(!isSidebarOpen)} 
-        documents={documents} 
-        activeSection={activeSection} 
-        onSectionSelect={onSectionSelect} 
+        isOpen={isSidebarOpen} onToggle={() => setIsSidebarOpen(!isSidebarOpen)} 
+        sessions={sessions} activeSessionId={activeSessionId}
+        onNewChat={handleNewChat} onSwitchChat={setActiveSessionId}
+        onDeleteChat={(id) => {
+          const updated = sessions.filter(s => s.id !== id);
+          setSessions(updated);
+          ChatHistoryStore.deleteSession(id);
+        }}
       />
       
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 bg-black/40 border-b border-white/[0.04] flex items-center justify-between px-6 z-10">
-          <div className="flex items-center gap-4">
-            <img src="logo.png" alt="Auditros AI" className="w-8 h-8 object-cover rounded-lg border border-white/10" />
-            <h1 className="text-lg font-black tracking-tight gradient-text font-jakarta">Auditros AI</h1>
-            <div className="flex items-center gap-2 px-2 py-0.5 rounded-md bg-cyan-500/5 border border-cyan-500/20">
-              <div className="w-1 h-1 rounded-full bg-cyan-400 animate-pulse"></div>
-              <span className="text-[8px] font-black text-cyan-400 uppercase tracking-[0.2em]">{activeSection}</span>
+        <header className="h-14 bg-black/60 border-b border-white/[0.06] flex items-center justify-between px-8 z-10 backdrop-blur-md">
+          <div className="flex items-center gap-6">
+            <h1 className="text-base font-bold tracking-tight text-white">Auditros <span className="text-cyan-400">AI</span></h1>
+            <div className="h-4 w-[1px] bg-white/10"></div>
+            <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 shadow-[0_0_8px_#00e5ff]"></div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400/80">Command Terminal</span>
             </div>
           </div>
-          
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={handleSelectKey}
-              className={`px-3 py-1.5 rounded-lg border transition-all text-[9px] font-black uppercase tracking-widest ${hasCustomKey ? 'text-green-400 bg-green-500/10 border-green-500/30' : 'text-gray-500 border-white/5 hover:border-cyan-500/30 hover:text-cyan-400'}`}
-            >
-               <i className={`fas ${hasCustomKey ? 'fa-bolt' : 'fa-key'} mr-2`}></i>
-               {hasCustomKey ? 'Secure Key Active' : 'Upgrade Quota'}
-            </button>
+          <div className="flex items-center gap-4">
+             <div className="px-3 py-1 rounded-full bg-white/[0.04] border border-white/10 text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+               Operator: Verified Professional
+             </div>
           </div>
         </header>
 
-        <div className="flex-1 flex overflow-hidden">
-          <ChatInterface 
-            messages={panelMessages[activeSection] || []} 
-            documents={documents} 
-            onSendMessage={handleSendMessage} 
-            isProcessing={isProcessing} 
-            onOpenStandard={() => {}}
-            onUpload={handleUpload}
-            onRemoveDocument={removeDocument}
-          />
-        </div>
+        <ChatInterface 
+          messages={activeSession?.messages || []} documents={documents}
+          onSendMessage={handleSendMessage} isProcessing={isProcessing}
+          onOpenStandard={() => {}} onUpload={setDocuments} onRemoveDocument={(id) => setDocuments(prev => prev.filter(d => d.id !== id))}
+        />
       </main>
-      <StandardModal isOpen={false} onClose={() => {}} standard={null} />
     </div>
   );
 };
